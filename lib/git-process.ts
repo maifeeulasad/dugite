@@ -88,6 +88,15 @@ interface ErrorWithCode extends Error {
   code: string | number | undefined
 }
 
+/**
+ * `IGitTask` inherits `IGitResult`, so it contains all members from `IGitResult`,
+ * such as : stdout, stderr, exitCode; it also contains a method named
+ * `cancel`, to kill a running task, by PID
+ */
+export interface IGitTask extends IGitResult {
+  cancel(): void,
+}
+
 export class GitProcess {
   private static pathExists(path: string): Boolean {
     try {
@@ -138,11 +147,15 @@ export class GitProcess {
    *
    * See the result's `stderr` and `exitCode` for any potential git error
    * information.
+   *
+   * `pidCallback` is a callback function to get the pid of the Spawned Process,
+   * which is the result of calling `execFile` inside
    */
   public static exec(
     args: string[],
     path: string,
-    options?: IGitExecutionOptions
+    options?: IGitExecutionOptions,
+    pidCallback?: (pid: number | undefined) => any
   ): Promise<IGitResult> {
     return new Promise<IGitResult>(function(resolve, reject) {
       let customEnv = {}
@@ -223,6 +236,11 @@ export class GitProcess {
           reject(err)
         }
       })
+
+      // If pidCallback is provided, then return the Spawned Process's PID
+      if (pidCallback) {
+        pidCallback(spawnedProcess.pid)
+      }
 
       ignoreClosedInputStream(spawnedProcess)
 
@@ -310,4 +328,58 @@ function ignoreClosedInputStream(process: ChildProcess) {
       throw err
     }
   })
+}
+
+
+export class GitTask{
+  // Stores PID of instance's
+  private pid: number | undefined = undefined
+
+
+  /*
+  `cancel` this instance's git operation, and return boolean result
+  if successful then return true, else false
+   */
+  public cancel(): boolean {
+    if (this.pid !== undefined) {
+      try {
+        process.kill(this.pid)
+        return true
+      } catch (e) {
+        return false
+      }
+    }
+    return false
+  }
+
+  /**
+   * `execTask` is just an extension of `exec`, instead of returning `IGitResult`,
+   * it returns `IGitTask`, and `IGitTask` contains a method called `cancel`, which
+   * refers to instance's `cancel`, so that the PID can be killed
+   */
+  public execTask(
+    args: string[],
+    path: string,
+    options?: IGitExecutionOptions
+  ): Promise<IGitTask> {
+    let that = this
+    return new Promise<IGitTask>((resolve, reject) => {
+      GitProcess.exec(args, path, options, (pid) => {
+        if (pid !== undefined) {
+          this.pid = pid
+        }
+      }).then((res) => {
+        resolve({
+          stdout: res.stdout,
+          stderr: res.stderr,
+          exitCode: res.exitCode,
+          cancel() {
+            that.cancel()
+          }
+        })
+      }).catch((err)=>{
+        reject(err)
+      })
+    })
+  }
 }
